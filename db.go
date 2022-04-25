@@ -259,8 +259,10 @@ func (db *DB) runUpdate(url string) error {
 		return err
 	}
 	if !yes {
+		db.sendInfo("no update needed")
 		return nil
 	}
+	db.sendInfo(fmt.Sprintf("downloading db from %s", url))
 	tmpfile, err := db.download(url)
 	if err != nil {
 		return err
