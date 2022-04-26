@@ -1,5 +1,7 @@
 FROM golang:1.18
 
+ARG DATABASE_URL
+
 COPY cmd/freegeoip/public /var/www
 
 ADD . /go/src/github.com/fiorix/freegeoip
@@ -11,8 +13,12 @@ RUN \
 	apt-get clean && rm -rf /var/lib/apt/lists/* && \
 	useradd -ms /bin/bash freegeoip
 
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+RUN curl -fSLo /db.gz $DATABASE_URL
+
 USER freegeoip
-ENTRYPOINT ["/go/bin/freegeoip"]
+ENTRYPOINT ["/entrypoint.sh"]
 
 EXPOSE 8080
 
