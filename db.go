@@ -7,21 +7,18 @@ package freegeoip
 import (
 	"compress/gzip"
 	"crypto/md5"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
-	"math"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
-	"github.com/howeyc/fsnotify"
+	"github.com/fsnotify/fsnotify"
 	"github.com/oschwald/maxminddb-golang"
 )
 
@@ -81,51 +78,6 @@ func Open(dsn string) (*DB, error) {
 	return db, nil
 }
 
-// MaxMindUpdateURL generates the URL for MaxMind paid databases.
-func MaxMindUpdateURL(hostname, productID, userID, licenseKey string) (string, error) {
-	limiter := func(r io.Reader) *io.LimitedReader {
-		return &io.LimitedReader{R: r, N: 1 << 30}
-	}
-	baseurl := "https://" + hostname + "/app/"
-	// Get the file name for the product ID.
-	u := baseurl + "update_getfilename?product_id=" + productID
-	resp, err := http.Get(u)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	md5hash := md5.New()
-	_, err = io.Copy(md5hash, limiter(resp.Body))
-	if err != nil {
-		return "", err
-	}
-	sum := md5hash.Sum(nil)
-	hexdigest1 := hex.EncodeToString(sum[:])
-	// Get our client IP address.
-	resp, err = http.Get(baseurl + "update_getipaddr")
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	md5hash = md5.New()
-	io.WriteString(md5hash, licenseKey)
-	_, err = io.Copy(md5hash, limiter(resp.Body))
-	if err != nil {
-		return "", err
-	}
-	sum = md5hash.Sum(nil)
-	hexdigest2 := hex.EncodeToString(sum[:])
-	// Generate the URL.
-	params := url.Values{
-		"db_md5":        {hexdigest1},
-		"challenge_md5": {hexdigest2},
-		"user_id":       {userID},
-		"edition_id":    {productID},
-	}
-	u = baseurl + "update_secure?" + params.Encode()
-	return u, nil
-}
-
 // OpenURL creates and initializes a DB from a URL.
 // It automatically downloads and updates the file in background, and
 // keeps a local copy on $TMPDIR.
@@ -139,8 +91,8 @@ func OpenURL(url string, updateInterval, maxRetryInterval time.Duration) (*DB, e
 		updateInterval:   updateInterval,
 		maxRetryInterval: maxRetryInterval,
 	}
-	db.openFile() // Optional, might fail.
-	go db.autoUpdate(url)
+	db.tryUpdate(url)
+	db.openFile()
 	err := db.watchFile()
 	if err != nil {
 		db.Close()
@@ -159,17 +111,20 @@ func (db *DB) watchFile() error {
 		return err
 	}
 	go db.watchEvents(watcher)
-	return watcher.Watch(dbdir)
+	return watcher.Add(dbdir)
 }
 
 func (db *DB) watchEvents(watcher *fsnotify.Watcher) {
 	for {
 		select {
-		case ev := <-watcher.Event:
-			if ev.Name == db.file && (ev.IsCreate() || ev.IsModify()) {
+		case ev, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if ev.Name == db.file && ev.Op&fsnotify.Write == fsnotify.Write {
 				db.openFile()
 			}
-		case <-watcher.Error:
+		case <-watcher.Errors:
 		case <-db.notifyQuit:
 			watcher.Close()
 			return
@@ -230,27 +185,15 @@ func (db *DB) setReader(reader *maxminddb.Reader, modtime time.Time, checksum st
 	}
 }
 
-func (db *DB) autoUpdate(url string) {
-	backoff := time.Second
-	for {
-		db.sendInfo("starting update")
-		err := db.runUpdate(url)
-		if err != nil {
-			bs := backoff.Seconds()
-			ms := db.maxRetryInterval.Seconds()
-			backoff = time.Duration(math.Min(bs*math.E, ms)) * time.Second
-			db.sendError(fmt.Errorf("download failed (will retry in %s): %s", backoff, err))
-		} else {
-			backoff = db.updateInterval
-		}
-		db.sendInfo("finished update")
-		select {
-		case <-db.notifyQuit:
-			return
-		case <-time.After(backoff):
-			// Sleep till time for the next update attempt.
-		}
+func (db *DB) tryUpdate(url string) {
+	db.sendInfo("starting update")
+	db.sendInfo("yep")
+	err := db.runUpdate(url)
+	db.sendInfo("ok")
+	if err != nil {
+		db.sendError(fmt.Errorf("download failed"))
 	}
+	db.sendInfo("finished update")
 }
 
 func (db *DB) runUpdate(url string) error {

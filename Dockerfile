@@ -1,31 +1,27 @@
-FROM golang:1.18
+FROM golang:1.18-alpine
 
 ARG DATABASE_URL
 
-COPY cmd/freegeoip/public /var/www
+WORKDIR /app
 
-ADD . /go/src/github.com/fiorix/freegeoip
-RUN \
-	cd /go/src/github.com/fiorix/freegeoip/cmd/freegeoip && \
-	go mod download && go get -d && go install && \
-	apt-get update && apt-get install -y libcap2-bin && \
-	setcap cap_net_bind_service=+ep /go/bin/freegeoip && \
-	apt-get clean && rm -rf /var/lib/apt/lists/* && \
-	useradd -ms /bin/bash freegeoip
+COPY go.mod go.sum
+RUN go mod download
 
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-RUN curl -fSLo /db.gz $DATABASE_URL
+COPY *.go ./
+COPY apiserver ./apiserver
+COPY cmd ./cmd
 
-USER freegeoip
-ENTRYPOINT ["/entrypoint.sh"]
+RUN go build -o /freegeoip ./cmd/freegeoip
+
+RUN curl -fSLo db.gz $DATABASE_URL
+
+ENTRYPOINT ["/freegeoip"]
 
 EXPOSE 8080
 
 # CMD instructions:
 # Add  "-use-x-forwarded-for"      if your server is behind a reverse proxy
-# Add  "-public", "/var/www"       to enable the web front-end
-# Add  "-internal-server", "8888"  to enable the pprof+metrics server
+# Add  "-public", "/app/cmd/freegeoip/public"       to enable the web front-end
 #
 # Example:
-# CMD ["-use-x-forwarded-for", "-public", "/var/www", "-internal-server", "8888"]
+# CMD ["-use-x-forwarded-for", "-public", "/app/cmd/freegeoip/public"]

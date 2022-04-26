@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,39 +16,6 @@ import (
 )
 
 var testFile = "testdata/db.gz"
-
-func TestMaxMindUpdateURL(t *testing.T) {
-	UserID := "hello"
-	LicenseKey := "world"
-	u, err := MaxMindUpdateURL(
-		"updates.maxmind.com",
-		"GeoIP2-City",
-		UserID,
-		LicenseKey,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	uu, err := url.Parse(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := uu.Query()
-	switch {
-	case uu.Scheme != "https":
-		t.Fatalf("unexpected url scheme: want https, have %q", uu.Scheme)
-	case uu.Host != "updates.maxmind.com":
-		t.Fatalf("unexpected url host: want updates.maxmind.com, have %q", uu.Host)
-	case len(q["db_md5"]) == 0:
-		t.Fatal("missing db_md5 param")
-	case len(q["challenge_md5"]) == 0:
-		t.Fatal("missing challenge_md5 param")
-	case len(q["user_id"]) == 0 || q["user_id"][0] != UserID:
-		t.Fatalf("unexpected user id: want %q, have %q", UserID, q["user_id"])
-	case len(q["edition_id"]) == 0 || q["edition_id"][0] != "GeoIP2-City":
-		t.Fatalf("unexpected edition_id: %q", q["edition_id"])
-	}
-}
 
 func TestDownload(t *testing.T) {
 	if _, err := os.Stat(testFile); err == nil {
@@ -93,20 +59,20 @@ func TestNeedUpdateSameFile(t *testing.T) {
 }
 
 func TestNeedUpdateSameMD5(t *testing.T) {
-  db := &DB{file: testFile}
-  _, checksum, err := db.newReader(db.file)
-  if err != nil {
-    t.Fatal(err)
-  }
-  db.checksum = checksum
+	db := &DB{file: testFile}
+	_, checksum, err := db.newReader(db.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.checksum = checksum
 	mux := http.NewServeMux()
-  changeHeaderThenServe := func(h http.Handler) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-      w.Header().Add("X-Database-MD5", checksum)
-      h.ServeHTTP(w, r)
-    }
-  }
-  mux.Handle("/testdata/", changeHeaderThenServe(http.FileServer(http.Dir("."))))
+	changeHeaderThenServe := func(h http.Handler) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("X-Database-MD5", checksum)
+			h.ServeHTTP(w, r)
+		}
+	}
+	mux.Handle("/testdata/", changeHeaderThenServe(http.FileServer(http.Dir("."))))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	yes, err := db.needUpdate(srv.URL + "/" + testFile)
@@ -120,13 +86,13 @@ func TestNeedUpdateSameMD5(t *testing.T) {
 
 func TestNeedUpdateMD5(t *testing.T) {
 	mux := http.NewServeMux()
-  changeHeaderThenServe := func(h http.Handler) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-      w.Header().Add("X-Database-MD5", "9823y5981y2398y1234")
-      h.ServeHTTP(w, r)
-    }
-  }
-  mux.Handle("/testdata/", changeHeaderThenServe(http.FileServer(http.Dir("."))))
+	changeHeaderThenServe := func(h http.Handler) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("X-Database-MD5", "9823y5981y2398y1234")
+			h.ServeHTTP(w, r)
+		}
+	}
+	mux.Handle("/testdata/", changeHeaderThenServe(http.FileServer(http.Dir("."))))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	db := &DB{file: testFile}

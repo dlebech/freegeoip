@@ -21,8 +21,6 @@ func newTestHandler() (http.Handler, error) {
 	c.APIPrefix = "/api"
 	c.PublicDir = "."
 	c.DB = filepath.Join(filepath.Dir(f), "../testdata/db.gz")
-	c.RateLimitLimit = 5
-	c.RateLimitBackend = "map"
 	c.Silent = true
 	return NewHandler(c)
 }
@@ -95,11 +93,6 @@ func TestWriters(t *testing.T) {
 		{
 			Method:     "GET",
 			URL:        &url.URL{Path: "/api/csv/"},
-			RemoteAddr: "[::1]:1905",
-		},
-		{
-			Method:     "GET",
-			URL:        &url.URL{Path: "/api/xml/"},
 			RemoteAddr: "[::1]:1905",
 		},
 		{

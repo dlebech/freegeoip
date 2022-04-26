@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 
@@ -17,7 +16,7 @@ import (
 )
 
 // Version tag.
-var Version = "3.4.1"
+var Version = "4.0.0"
 
 // Run is the entrypoint for the freegeoip server.
 func Run() {
@@ -48,22 +47,6 @@ func Run() {
 	select {}
 }
 
-// connStateFunc is a function that can handle connection state.
-type connStateFunc func(c net.Conn, s http.ConnState)
-
-// connStateMetrics collect metrics per connection state, per protocol.
-// e.g. new http, closed http.
-func connStateMetrics(proto string) connStateFunc {
-	return func(c net.Conn, s http.ConnState) {
-		switch s {
-		case http.StateNew:
-			clientConnsGauge.WithLabelValues(proto).Inc()
-		case http.StateClosed:
-			clientConnsGauge.WithLabelValues(proto).Dec()
-		}
-	}
-}
-
 func runServer(c *Config, f http.Handler) {
 	log.Println("freegeoip http server starting on", c.ServerAddr)
 	s := &http.Server{
@@ -72,7 +55,6 @@ func runServer(c *Config, f http.Handler) {
 		ReadTimeout:  c.ReadTimeout,
 		WriteTimeout: c.WriteTimeout,
 		ErrorLog:     c.errorLogger(),
-		ConnState:    connStateMetrics("http"),
 	}
 	log.Fatal(s.ListenAndServe())
 }
@@ -85,7 +67,6 @@ func runTLSServer(c *Config, f http.Handler) {
 		ReadTimeout:  c.ReadTimeout,
 		WriteTimeout: c.WriteTimeout,
 		ErrorLog:     c.errorLogger(),
-		ConnState:    connStateMetrics("https"),
 	}
 	log.Fatal(s.ListenAndServeTLS(c.TLSCertFile, c.TLSKeyFile))
 }

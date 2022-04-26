@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io"
 	"log"
@@ -20,25 +19,19 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bradfitz/gomemcache/memcache"
-	"github.com/fiorix/go-redis/redis"
 	"github.com/go-web/httplog"
 	"github.com/go-web/httpmux"
-	"github.com/go-web/httprl"
-	"github.com/go-web/httprl/memcacherl"
-	"github.com/go-web/httprl/redisrl"
-	newrelic "github.com/newrelic/go-agent"
 	"github.com/rs/cors"
 	"golang.org/x/text/language"
 
 	"github.com/fiorix/freegeoip"
+	"github.com/julienschmidt/httprouter"
 )
 
 type apiHandler struct {
-	db    *freegeoip.DB
-	conf  *Config
-	cors  *cors.Cors
-	nrapp newrelic.Application
+	db   *freegeoip.DB
+	conf *Config
+	cors *cors.Cors
 }
 
 // NewHandler creates an http handler for the freegeoip server that
@@ -54,47 +47,34 @@ func NewHandler(c *Config) (http.Handler, error) {
 		AllowCredentials: true,
 	})
 	f := &apiHandler{db: db, conf: c, cors: cf}
-	mc := httpmux.DefaultConfig
-	if err := f.config(&mc); err != nil {
-		return nil, err
-	}
-	mux := httpmux.NewHandler(&mc)
-	mux.GET("/csv/*host", f.register("csv", csvWriter))
-	mux.GET("/xml/*host", f.register("xml", xmlWriter))
-	mux.GET("/json/*host", f.register("json", jsonWriter))
+	chain := f.getChain()
+	router := httprouter.New()
+	router.HandlerFunc(http.MethodGet, "/csv/:host", buildChain(f.iplookup(csvWriter), chain...))
+	router.HandlerFunc(http.MethodGet, "/json/:host", buildChain(f.iplookup(jsonWriter), chain...))
+	router.NotFound = newPublicDirHandler(f.conf.PublicDir)
 	go watchEvents(db)
-	return mux, nil
+	return router, nil
 }
 
-func (f *apiHandler) config(mc *httpmux.Config) error {
-	mc.Prefix = f.conf.APIPrefix
-	mc.NotFound = newPublicDirHandler(f.conf.PublicDir)
+// buildChain builds the middlware chain recursively, functions are first class
+func buildChain(f http.HandlerFunc, m ...httpmux.MiddlewareFunc) http.HandlerFunc {
+	// if our chain is done, use the original handlerfunc
+	if len(m) == 0 {
+		return f
+	}
+	// otherwise nest the handlerfuncs
+	return m[0](buildChain(f, m[1:cap(m)]...))
+}
+
+func (f *apiHandler) getChain() []httpmux.MiddlewareFunc {
+	var chain = []httpmux.MiddlewareFunc{}
 	if f.conf.UseXForwardedFor {
-		mc.UseFunc(httplog.UseXForwardedFor)
+		chain = append(chain, httplog.UseXForwardedFor)
 	}
 	if !f.conf.Silent {
-		mc.UseFunc(httplog.ApacheCombinedFormat(f.conf.accessLogger()))
+		chain = append(chain, httplog.ApacheCombinedFormat(f.conf.accessLogger()))
 	}
-	if f.conf.HSTS != "" {
-		mc.UseFunc(hstsMiddleware(f.conf.HSTS))
-	}
-	mc.UseFunc(clientMetricsMiddleware(f.db))
-	if f.conf.RateLimitLimit > 0 {
-		rl, err := newRateLimiter(f.conf)
-		if err != nil {
-			return fmt.Errorf("failed to create rate limiter: %v", err)
-		}
-		mc.Use(rl.Handle)
-	}
-	if f.conf.NewrelicName != "" && f.conf.NewrelicKey != "" {
-		config := newrelic.NewConfig(f.conf.NewrelicName, f.conf.NewrelicKey)
-		app, err := newrelic.NewApplication(config)
-		if err != nil {
-			return fmt.Errorf("failed to create newrelic application: {name: %v, key: %v}", f.conf.NewrelicName, f.conf.NewrelicKey)
-		}
-		f.nrapp = app
-	}
-	return nil
+	return chain
 }
 
 func newPublicDirHandler(path string) http.HandlerFunc {
@@ -105,66 +85,11 @@ func newPublicDirHandler(path string) http.HandlerFunc {
 	return handler.ServeHTTP
 }
 
-func hstsMiddleware(policy string) httpmux.MiddlewareFunc {
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			if r.TLS == nil {
-				return
-			}
-			w.Header().Set("Strict-Transport-Security", policy)
-			next(w, r)
-		}
-	}
-}
-
-func clientMetricsMiddleware(db *freegeoip.DB) httpmux.MiddlewareFunc {
-	type query struct {
-		Country struct {
-			ISOCode string `maxminddb:"iso_code"`
-		} `maxminddb:"country"`
-	}
-	return func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			next(w, r)
-			// Collect metrics after serving the request.
-			host, _, err := net.SplitHostPort(r.RemoteAddr)
-			if err != nil {
-				return
-			}
-			ip := net.ParseIP(host)
-			if ip == nil {
-				return
-			}
-			if ip.To4() != nil {
-				clientIPProtoCounter.WithLabelValues("4").Inc()
-			} else {
-				clientIPProtoCounter.WithLabelValues("6").Inc()
-			}
-			var q query
-			err = db.Lookup(ip, &q)
-			if err != nil || q.Country.ISOCode == "" {
-				clientCountryCounter.WithLabelValues("unknown").Inc()
-				return
-			}
-			clientCountryCounter.WithLabelValues(q.Country.ISOCode).Inc()
-		}
-	}
-}
-
 type writerFunc func(w http.ResponseWriter, r *http.Request, d *responseRecord)
-
-func (f *apiHandler) register(name string, writer writerFunc) http.HandlerFunc {
-	// if f.nrapp == nil {
-	// 	h = prometheus.InstrumentHandler(name, f.iplookup(writer))
-	// } else {
-	// 	h = prometheus.InstrumentHandler(newrelic.WrapHandle(f.nrapp, name, f.iplookup(writer)))
-	// }
-	return f.cors.Handler(f.iplookup(writer)).ServeHTTP
-}
 
 func (f *apiHandler) iplookup(writer writerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		host := httpmux.Params(r).ByName("host")
+		host := httprouter.ParamsFromContext(r.Context()).ByName("host")
 		if len(host) > 0 && host[0] == '/' {
 			host = host[1:]
 		}
@@ -194,14 +119,6 @@ func (f *apiHandler) iplookup(writer writerFunc) http.HandlerFunc {
 func csvWriter(w http.ResponseWriter, r *http.Request, d *responseRecord) {
 	w.Header().Set("Content-Type", "text/csv")
 	io.WriteString(w, d.String())
-}
-
-func xmlWriter(w http.ResponseWriter, r *http.Request, d *responseRecord) {
-	w.Header().Set("Content-Type", "application/xml")
-	x := xml.NewEncoder(w)
-	x.Indent("", "\t")
-	x.Encode(d)
-	w.Write([]byte{'\n'})
 }
 
 func jsonWriter(w http.ResponseWriter, r *http.Request, d *responseRecord) {
@@ -237,10 +154,14 @@ func (q *geoipQuery) Record(ip net.IP, lang string) *responseRecord {
 		Latitude:    roundFloat(q.Location.Latitude, .5, 4),
 		Longitude:   roundFloat(q.Location.Longitude, .5, 4),
 		MetroCode:   q.Location.MetroCode,
+		Continent:   q.Continent.Names[lang],
 	}
 	if len(q.Region) > 0 {
 		r.RegionCode = q.Region[0].ISOCode
 		r.RegionName = q.Region[0].Names[lang]
+	}
+	if val, ok := q.Continent.Names[lang]; ok {
+		r.Continent = val
 	}
 	return r
 }
@@ -282,18 +203,18 @@ func roundFloat(val float64, roundOn float64, places int) (newVal float64) {
 }
 
 type responseRecord struct {
-	XMLName     xml.Name `xml:"Response" json:"-"`
-	IP          string   `json:"ip"`
-	CountryCode string   `json:"country_code"`
-	CountryName string   `json:"country_name"`
-	RegionCode  string   `json:"region_code"`
-	RegionName  string   `json:"region_name"`
-	City        string   `json:"city"`
-	ZipCode     string   `json:"zip_code"`
-	TimeZone    string   `json:"time_zone"`
-	Latitude    float64  `json:"latitude"`
-	Longitude   float64  `json:"longitude"`
-	MetroCode   uint     `json:"metro_code"`
+	IP          string  `json:"ip"`
+	CountryCode string  `json:"country_code"`
+	CountryName string  `json:"country_name"`
+	RegionCode  string  `json:"region_code"`
+	RegionName  string  `json:"region_name"`
+	City        string  `json:"city"`
+	ZipCode     string  `json:"zip_code"`
+	TimeZone    string  `json:"time_zone"`
+	Latitude    float64 `json:"latitude"`
+	Longitude   float64 `json:"longitude"`
+	MetroCode   uint    `json:"metro_code"`
+	Continent   string  `json:"continent"`
 }
 
 func (rr *responseRecord) String() string {
@@ -319,21 +240,6 @@ func (rr *responseRecord) String() string {
 
 // openDB opens and returns the IP database file or URL.
 func openDB(c *Config) (*freegeoip.DB, error) {
-	// This is a paid product. Get the updates URL.
-	if len(c.UserID) > 0 && len(c.LicenseKey) > 0 {
-		var err error
-		c.DB, err = freegeoip.MaxMindUpdateURL(
-			c.UpdatesHost,
-			c.ProductID,
-			c.UserID,
-			c.LicenseKey,
-		)
-		if err != nil {
-			return nil, err
-		}
-		log.Println("Using updates URL:", c.DB)
-	}
-
 	u, err := url.Parse(c.DB)
 	if err != nil || len(u.Scheme) == 0 {
 		return freegeoip.Open(c.DB)
@@ -347,47 +253,12 @@ func watchEvents(db *freegeoip.DB) {
 		select {
 		case file := <-db.NotifyOpen():
 			log.Println("database loaded:", file)
-			dbEventCounter.WithLabelValues("loaded").Inc()
 		case err := <-db.NotifyError():
 			log.Println("database error:", err)
-			dbEventCounter.WithLabelValues("failed").Inc()
 		case msg := <-db.NotifyInfo():
 			log.Println("database info:", msg)
 		case <-db.NotifyClose():
 			return
 		}
 	}
-}
-
-func newRateLimiter(c *Config) (*httprl.RateLimiter, error) {
-	var backend httprl.Backend
-	switch c.RateLimitBackend {
-	case "map":
-		m := httprl.NewMap(1)
-		m.Start()
-		backend = m
-	case "redis":
-		addrs := strings.Split(c.RedisAddr, ",")
-		rc, err := redis.NewClient(addrs...)
-		if err != nil {
-			return nil, err
-		}
-		rc.SetTimeout(c.RedisTimeout)
-		backend = redisrl.New(rc)
-	case "memcache":
-		addrs := strings.Split(c.MemcacheAddr, ",")
-		mc := memcache.New(addrs...)
-		mc.Timeout = c.MemcacheTimeout
-		backend = memcacherl.New(mc)
-	default:
-		return nil, fmt.Errorf("unsupported backend: %q" + c.RateLimitBackend)
-	}
-	rl := &httprl.RateLimiter{
-		Backend:  backend,
-		Limit:    c.RateLimitLimit,
-		Interval: int32(c.RateLimitInterval.Seconds()),
-		ErrorLog: c.errorLogger(),
-		//Policy:   httprl.AllowPolicy,
-	}
-	return rl, nil
 }
