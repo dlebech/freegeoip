@@ -20,7 +20,9 @@ jobs:
       - name: Get current month as YYYY-MM and set in environment
         if: !env.MONTH
         run: echo "MONTH=$(date +'%Y-%m')" >> $GITHUB_ENV
-      - run: echo "Month: $MONTH"
+      - run: |
+          echo "Month: $MONTH"
+          echo "https://download.db-ip.com/free/dbip-city-lite-$MONTH.mmdb.gz"
   # push_to_registry:
   #   name: Push Docker image to Docker Hub
   #   runs-on: ubuntu-latest
