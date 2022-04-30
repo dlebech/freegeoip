@@ -1,0 +1,49 @@
+name: Docker HUB Publish
+
+on:
+  schedule:
+    # Publish automatically on the 3rd of the month at 2:01 AM
+    - cron: '1 2 3 * *'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Month to use in tag, e.g. "2022-03"'
+        required: false
+        type: string
+
+jobs:
+  log-the-inputs:
+    env:
+      MONTH: ${{ github.event.inputs.month }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Get current month as YYYY-MM and set in environment
+        if: !env.MONTH
+        run: echo "MONTH=$(date +'%Y-%m')" >> $GITHUB_ENV
+      - run: echo "Month: $MONTH"
+  # push_to_registry:
+  #   name: Push Docker image to Docker Hub
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Check out the repo
+  #       uses: actions/checkout@v3
+  #     
+  #     - name: Log in to Docker Hub
+  #       uses: docker/login-action@v1
+  #       with:
+  #         username: ${{ secrets.DOCKERHUB_USERNAME }}
+  #         password: ${{ secrets.DOCKERHUB_TOKEN }}
+  #     
+  #     - name: Extract metadata (tags, labels) for Docker
+  #       id: meta
+  #       uses: docker/metadata-action@v3
+  #       with:
+  #         images: ${{ secrets.DOCKERHUB_USERNAME }}/freegeoip
+  #     
+  #     - name: Build and push Docker image
+  #       uses: docker/build-push-action@v2
+  #       with:
+  #         context: .
+  #         push: true
+  #         tags: ${{ steps.meta.outputs.tags }}
+  #         labels: ${{ steps.meta.outputs.labels }}

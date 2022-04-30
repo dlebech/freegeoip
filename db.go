@@ -29,11 +29,10 @@ var (
 	ErrUnavailable = errors.New("no database available")
 
 	// Local cached copy of a database downloaded from a URL.
-	defaultDB = filepath.Join(os.TempDir(), "freegeoip", "db.gz")
+	defaultDB = "./db.gz"
 
-	// MaxMindDB is the URL of the free MaxMind GeoLite2 database.
-	// MaxMindDB = "http://geolite.maxmind.com/download/geoip/database/GeoLite2-City.mmdb.gz"
-	MaxMindDB = "https://download.db-ip.com/free/dbip-city-lite-2022-04.mmdb.gz"
+	// MaxMindDBURL is the URL of the free MaxMind GeoLite2 database.
+	MaxMindDBURL = "https://download.db-ip.com/free/dbip-city-lite-2022-04.mmdb.gz"
 )
 
 // DB is the IP geolocation database.
@@ -48,9 +47,6 @@ type DB struct {
 	closed      bool              // Mark this db as closed.
 	lastUpdated time.Time         // Last time the db was updated.
 	mu          sync.RWMutex      // Protects all the above.
-
-	updateInterval   time.Duration // Update interval.
-	maxRetryInterval time.Duration // Max retry interval in case of failure.
 }
 
 // Open creates and initializes a DB from a local file.
@@ -81,18 +77,16 @@ func Open(dsn string) (*DB, error) {
 // OpenURL creates and initializes a DB from a URL.
 // It automatically downloads and updates the file in background, and
 // keeps a local copy on $TMPDIR.
-func OpenURL(url string, updateInterval, maxRetryInterval time.Duration) (*DB, error) {
+func OpenURL(url string) (*DB, error) {
 	db := &DB{
-		file:             defaultDB,
-		notifyQuit:       make(chan struct{}),
-		notifyOpen:       make(chan string, 1),
-		notifyError:      make(chan error, 1),
-		notifyInfo:       make(chan string, 1),
-		updateInterval:   updateInterval,
-		maxRetryInterval: maxRetryInterval,
+		file:        defaultDB,
+		notifyQuit:  make(chan struct{}),
+		notifyOpen:  make(chan string, 1),
+		notifyError: make(chan error, 1),
+		notifyInfo:  make(chan string, 1),
 	}
-	db.tryUpdate(url)
 	db.openFile()
+	go db.tryUpdate(url)
 	err := db.watchFile()
 	if err != nil {
 		db.Close()
@@ -121,15 +115,18 @@ func (db *DB) watchEvents(watcher *fsnotify.Watcher) {
 			if !ok {
 				return
 			}
-			if ev.Name == db.file && ev.Op&fsnotify.Write == fsnotify.Write {
-				db.openFile()
+			if ev.Name == db.file {
+				fmt.Println("event", ev)
+				if ev.Op&fsnotify.Write == fsnotify.Write || ev.Op&fsnotify.Create == fsnotify.Create {
+					db.openFile()
+				}
 			}
 		case <-watcher.Errors:
 		case <-db.notifyQuit:
+			fmt.Println("error during watching")
 			watcher.Close()
 			return
 		}
-		time.Sleep(time.Second) // Suppress high-rate events.
 	}
 }
 
@@ -179,17 +176,12 @@ func (db *DB) setReader(reader *maxminddb.Reader, modtime time.Time, checksum st
 	db.reader = reader
 	db.lastUpdated = modtime.UTC()
 	db.checksum = checksum
-	select {
-	case db.notifyOpen <- db.file:
-	default:
-	}
+	db.notifyOpen <- db.file
 }
 
 func (db *DB) tryUpdate(url string) {
 	db.sendInfo("starting update")
-	db.sendInfo("yep")
 	err := db.runUpdate(url)
-	db.sendInfo("ok")
 	if err != nil {
 		db.sendError(fmt.Errorf("download failed"))
 	}
@@ -321,10 +313,7 @@ func (db *DB) sendError(err error) {
 	if db.closed {
 		return
 	}
-	select {
-	case db.notifyError <- err:
-	default:
-	}
+	db.notifyError <- err
 }
 
 func (db *DB) sendInfo(message string) {
@@ -333,10 +322,7 @@ func (db *DB) sendInfo(message string) {
 	if db.closed {
 		return
 	}
-	select {
-	case db.notifyInfo <- message:
-	default:
-	}
+	db.notifyInfo <- message
 }
 
 // Lookup performs a database lookup of the given IP address, and stores

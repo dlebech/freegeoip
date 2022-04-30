@@ -17,11 +17,9 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
-	"strings"
 
 	"github.com/go-web/httplog"
 	"github.com/go-web/httpmux"
-	"github.com/rs/cors"
 	"golang.org/x/text/language"
 
 	"github.com/fiorix/freegeoip"
@@ -31,7 +29,6 @@ import (
 type apiHandler struct {
 	db   *freegeoip.DB
 	conf *Config
-	cors *cors.Cors
 }
 
 // NewHandler creates an http handler for the freegeoip server that
@@ -41,17 +38,10 @@ func NewHandler(c *Config) (http.Handler, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %v", err)
 	}
-	cf := cors.New(cors.Options{
-		AllowedOrigins:   strings.Split(c.CORSOrigin, ","),
-		AllowedMethods:   []string{"GET"},
-		AllowCredentials: true,
-	})
-	f := &apiHandler{db: db, conf: c, cors: cf}
+	f := &apiHandler{db: db, conf: c}
 	chain := f.getChain()
 	router := httprouter.New()
-	router.HandlerFunc(http.MethodGet, "/csv/:host", buildChain(f.iplookup(csvWriter), chain...))
 	router.HandlerFunc(http.MethodGet, "/json/:host", buildChain(f.iplookup(jsonWriter), chain...))
-	router.NotFound = newPublicDirHandler(f.conf.PublicDir)
 	go watchEvents(db)
 	return router, nil
 }
@@ -75,14 +65,6 @@ func (f *apiHandler) getChain() []httpmux.MiddlewareFunc {
 		chain = append(chain, httplog.ApacheCombinedFormat(f.conf.accessLogger()))
 	}
 	return chain
-}
-
-func newPublicDirHandler(path string) http.HandlerFunc {
-	handler := http.NotFoundHandler()
-	if path != "" {
-		handler = http.FileServer(http.Dir(path))
-	}
-	return handler.ServeHTTP
 }
 
 type writerFunc func(w http.ResponseWriter, r *http.Request, d *responseRecord)
@@ -114,11 +96,6 @@ func (f *apiHandler) iplookup(writer writerFunc) http.HandlerFunc {
 		resp := q.Record(ip, r.Header.Get("Accept-Language"))
 		writer(w, r, resp)
 	}
-}
-
-func csvWriter(w http.ResponseWriter, r *http.Request, d *responseRecord) {
-	w.Header().Set("Content-Type", "text/csv")
-	io.WriteString(w, d.String())
 }
 
 func jsonWriter(w http.ResponseWriter, r *http.Request, d *responseRecord) {
@@ -244,7 +221,7 @@ func openDB(c *Config) (*freegeoip.DB, error) {
 	if err != nil || len(u.Scheme) == 0 {
 		return freegeoip.Open(c.DB)
 	}
-	return freegeoip.OpenURL(c.DB, c.UpdateInterval, c.RetryInterval)
+	return freegeoip.OpenURL(c.DB)
 }
 
 // watchEvents logs and collect metrics of database events.

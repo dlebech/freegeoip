@@ -22,7 +22,7 @@ func TestDownload(t *testing.T) {
 		t.Skip("Test database already exists:", testFile)
 	}
 	db := &DB{}
-	dbfile, err := db.download(MaxMindDB)
+	dbfile, err := db.download(MaxMindDBURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,13 +164,6 @@ func TestSendError(t *testing.T) {
 	}
 }
 
-func TestSkipSendError(t *testing.T) {
-	db := &DB{notifyError: make(chan error, 1)}
-	db.sendError(nil)
-	db.sendError(nil)
-	close(db.notifyError)
-}
-
 func TestWatchFile(t *testing.T) {
 	db, err := Open(testFile)
 	if err != nil {
@@ -207,7 +200,7 @@ func TestWatchMkdir(t *testing.T) {
 		time.Sleep(time.Second)
 		os.RemoveAll(filepath.Dir(defaultDB))
 	}()
-	db, err := OpenURL(srv.URL+"/"+testFile, time.Hour, time.Minute)
+	db, err := OpenURL(srv.URL + "/" + testFile)
 	if err != nil {
 		t.Fatalf("Failed to create %s: %s", filepath.Dir(defaultDB), err)
 	}
@@ -232,7 +225,7 @@ func TestWatchMkdirFail(t *testing.T) {
 	mux.Handle("/testdata/", http.FileServer(http.Dir(".")))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	db, err := OpenURL(srv.URL+"/"+testFile, time.Hour, time.Minute)
+	db, err := OpenURL(srv.URL + "/" + testFile)
 	if err == nil {
 		db.Close()
 		t.Fatalf("Unexpected creation of dir %s worked", basedir)
@@ -261,22 +254,30 @@ func TestLookupOnURL(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	os.Remove(defaultDB) // In case it exists.
-	db, err := OpenURL(srv.URL+"/"+testFile, time.Hour, time.Minute)
+	db, err := OpenURL(srv.URL + "/" + testFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	select {
-	case file := <-db.NotifyOpen():
-		if file != defaultDB {
-			t.Fatal("Unexpected db file:", file)
+	loop := true
+	for loop {
+
+		select {
+		case file := <-db.NotifyOpen():
+			if file != defaultDB {
+				t.Fatal("Unexpected db file:", file)
+			} else {
+				loop = false
+			}
+		case msg := <-db.NotifyInfo():
+			t.Log(msg)
+		case err := <-db.NotifyError():
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Timed out")
 		}
-	case err := <-db.NotifyError():
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Timed out")
 	}
 	var record DefaultQuery
 	err = db.Lookup(net.ParseIP("8.8.8.8"), &record)

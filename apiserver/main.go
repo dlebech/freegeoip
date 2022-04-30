@@ -38,35 +38,17 @@ func Run() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if c.ServerAddr != "" {
-		go runServer(c, f)
-	}
-	if c.TLSServerAddr != "" {
-		go runTLSServer(c, f)
-	}
-	select {}
+	runServer(c, f)
 }
 
 func runServer(c *Config, f http.Handler) {
-	log.Println("freegeoip http server starting on", c.ServerAddr)
+	log.Println("freegeoip http server starting on", c.ServerAddr())
 	s := &http.Server{
-		Addr:         c.ServerAddr,
+		Addr:         c.ServerAddr(),
 		Handler:      f,
 		ReadTimeout:  c.ReadTimeout,
 		WriteTimeout: c.WriteTimeout,
 		ErrorLog:     c.errorLogger(),
 	}
 	log.Fatal(s.ListenAndServe())
-}
-
-func runTLSServer(c *Config, f http.Handler) {
-	log.Println("freegeoip https server starting on", c.TLSServerAddr)
-	s := &http.Server{
-		Addr:         c.TLSServerAddr,
-		Handler:      f,
-		ReadTimeout:  c.ReadTimeout,
-		WriteTimeout: c.WriteTimeout,
-		ErrorLog:     c.errorLogger(),
-	}
-	log.Fatal(s.ListenAndServeTLS(c.TLSCertFile, c.TLSKeyFile))
 }

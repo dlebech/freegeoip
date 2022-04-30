@@ -9,7 +9,6 @@ require (
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/oschwald/maxminddb-golang v1.9.0
-	github.com/rs/cors v1.8.2
 	golang.org/x/text v0.3.7
 )
 
