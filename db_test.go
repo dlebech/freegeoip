@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,45 +17,12 @@ import (
 
 var testFile = "testdata/db.gz"
 
-func TestMaxMindUpdateURL(t *testing.T) {
-	UserID := "hello"
-	LicenseKey := "world"
-	u, err := MaxMindUpdateURL(
-		"updates.maxmind.com",
-		"GeoIP2-City",
-		UserID,
-		LicenseKey,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	uu, err := url.Parse(u)
-	if err != nil {
-		t.Fatal(err)
-	}
-	q := uu.Query()
-	switch {
-	case uu.Scheme != "https":
-		t.Fatalf("unexpected url scheme: want https, have %q", uu.Scheme)
-	case uu.Host != "updates.maxmind.com":
-		t.Fatalf("unexpected url host: want updates.maxmind.com, have %q", uu.Host)
-	case len(q["db_md5"]) == 0:
-		t.Fatal("missing db_md5 param")
-	case len(q["challenge_md5"]) == 0:
-		t.Fatal("missing challenge_md5 param")
-	case len(q["user_id"]) == 0 || q["user_id"][0] != UserID:
-		t.Fatalf("unexpected user id: want %q, have %q", UserID, q["user_id"])
-	case len(q["edition_id"]) == 0 || q["edition_id"][0] != "GeoIP2-City":
-		t.Fatalf("unexpected edition_id: %q", q["edition_id"])
-	}
-}
-
 func TestDownload(t *testing.T) {
 	if _, err := os.Stat(testFile); err == nil {
 		t.Skip("Test database already exists:", testFile)
 	}
 	db := &DB{}
-	dbfile, err := db.download(MaxMindDB)
+	dbfile, err := db.download(MaxMindDBURL)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,20 +59,20 @@ func TestNeedUpdateSameFile(t *testing.T) {
 }
 
 func TestNeedUpdateSameMD5(t *testing.T) {
-  db := &DB{file: testFile}
-  _, checksum, err := db.newReader(db.file)
-  if err != nil {
-    t.Fatal(err)
-  }
-  db.checksum = checksum
+	db := &DB{file: testFile}
+	_, checksum, err := db.newReader(db.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.checksum = checksum
 	mux := http.NewServeMux()
-  changeHeaderThenServe := func(h http.Handler) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-      w.Header().Add("X-Database-MD5", checksum)
-      h.ServeHTTP(w, r)
-    }
-  }
-  mux.Handle("/testdata/", changeHeaderThenServe(http.FileServer(http.Dir("."))))
+	changeHeaderThenServe := func(h http.Handler) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("X-Database-MD5", checksum)
+			h.ServeHTTP(w, r)
+		}
+	}
+	mux.Handle("/testdata/", changeHeaderThenServe(http.FileServer(http.Dir("."))))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	yes, err := db.needUpdate(srv.URL + "/" + testFile)
@@ -120,13 +86,13 @@ func TestNeedUpdateSameMD5(t *testing.T) {
 
 func TestNeedUpdateMD5(t *testing.T) {
 	mux := http.NewServeMux()
-  changeHeaderThenServe := func(h http.Handler) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-      w.Header().Add("X-Database-MD5", "9823y5981y2398y1234")
-      h.ServeHTTP(w, r)
-    }
-  }
-  mux.Handle("/testdata/", changeHeaderThenServe(http.FileServer(http.Dir("."))))
+	changeHeaderThenServe := func(h http.Handler) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Add("X-Database-MD5", "9823y5981y2398y1234")
+			h.ServeHTTP(w, r)
+		}
+	}
+	mux.Handle("/testdata/", changeHeaderThenServe(http.FileServer(http.Dir("."))))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	db := &DB{file: testFile}
@@ -198,13 +164,6 @@ func TestSendError(t *testing.T) {
 	}
 }
 
-func TestSkipSendError(t *testing.T) {
-	db := &DB{notifyError: make(chan error, 1)}
-	db.sendError(nil)
-	db.sendError(nil)
-	close(db.notifyError)
-}
-
 func TestWatchFile(t *testing.T) {
 	db, err := Open(testFile)
 	if err != nil {
@@ -241,7 +200,7 @@ func TestWatchMkdir(t *testing.T) {
 		time.Sleep(time.Second)
 		os.RemoveAll(filepath.Dir(defaultDB))
 	}()
-	db, err := OpenURL(srv.URL+"/"+testFile, time.Hour, time.Minute)
+	db, err := OpenURL(srv.URL + "/" + testFile)
 	if err != nil {
 		t.Fatalf("Failed to create %s: %s", filepath.Dir(defaultDB), err)
 	}
@@ -266,7 +225,7 @@ func TestWatchMkdirFail(t *testing.T) {
 	mux.Handle("/testdata/", http.FileServer(http.Dir(".")))
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	db, err := OpenURL(srv.URL+"/"+testFile, time.Hour, time.Minute)
+	db, err := OpenURL(srv.URL + "/" + testFile)
 	if err == nil {
 		db.Close()
 		t.Fatalf("Unexpected creation of dir %s worked", basedir)
@@ -295,22 +254,30 @@ func TestLookupOnURL(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	os.Remove(defaultDB) // In case it exists.
-	db, err := OpenURL(srv.URL+"/"+testFile, time.Hour, time.Minute)
+	db, err := OpenURL(srv.URL + "/" + testFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	select {
-	case file := <-db.NotifyOpen():
-		if file != defaultDB {
-			t.Fatal("Unexpected db file:", file)
+	loop := true
+	for loop {
+
+		select {
+		case file := <-db.NotifyOpen():
+			if file != defaultDB {
+				t.Fatal("Unexpected db file:", file)
+			} else {
+				loop = false
+			}
+		case msg := <-db.NotifyInfo():
+			t.Log(msg)
+		case err := <-db.NotifyError():
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("Timed out")
 		}
-	case err := <-db.NotifyError():
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Timed out")
 	}
 	var record DefaultQuery
 	err = db.Lookup(net.ParseIP("8.8.8.8"), &record)

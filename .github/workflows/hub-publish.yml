@@ -1,0 +1,50 @@
+name: Publish to Docker Hub
+
+on:
+  schedule:
+    # Publish automatically on the 2nd of the month at 0:20 AM
+    - cron: '20 0 2 * *'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'Month to use in tag, e.g. "2022-03"'
+        required: false
+        type: string
+
+jobs:
+  push_to_registry:
+    name: Push Docker image to Docker Hub
+    runs-on: ubuntu-latest
+    env:
+      MONTH: ${{ github.event.inputs.month }}
+    steps:
+      - name: Get current month as YYYY-MM and set in environment
+        if: ${{ !env.MONTH }}
+        run: echo "MONTH=$(date +'%Y-%m')" >> $GITHUB_ENV
+
+      - name: Check out the repo
+        uses: actions/checkout@v3
+      
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v1
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Extract metadata labels for Docker
+        id: meta
+        uses: docker/metadata-action@v3
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/freegeoip
+      
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v2
+        with:
+          context: .
+          push: true
+          build-args: |
+            DATABASE_URL=https://download.db-ip.com/free/dbip-city-lite-${{ env.MONTH }}.mmdb.gz
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/freegeoip:${{ env.MONTH }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/freegeoip:latest
+          labels: ${{ steps.meta.outputs.labels }}

@@ -7,7 +7,6 @@ package freegeoip
 import (
 	"log"
 	"net"
-	"time"
 )
 
 func ExampleOpen() {
@@ -25,9 +24,7 @@ func ExampleOpen() {
 }
 
 func ExampleOpenURL() {
-	updateInterval := 24 * time.Hour
-	maxRetryInterval := time.Hour
-	db, err := OpenURL(MaxMindDB, updateInterval, maxRetryInterval)
+	db, err := OpenURL(MaxMindDBURL)
 	if err != nil {
 		log.Fatal(err)
 	}
