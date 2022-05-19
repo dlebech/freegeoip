@@ -31,7 +31,7 @@ var (
 	// Local cached copy of a database downloaded from a URL.
 	defaultDB = "./db.gz"
 
-	// MaxMindDBURL is the URL of the free MaxMind GeoLite2 database.
+	// This URL is outdated and should only be used as fallback
 	MaxMindDBURL = "https://download.db-ip.com/free/dbip-city-lite-2022-04.mmdb.gz"
 )
 
@@ -211,26 +211,11 @@ func (db *DB) runUpdate(url string) error {
 }
 
 func (db *DB) needUpdate(url string) (bool, error) {
-	stat, err := os.Stat(db.file)
+	_, err := os.Stat(db.file)
 	if err != nil {
 		return true, nil // Local db is missing, must be downloaded.
 	}
 
-	resp, err := http.Head(url)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-
-	// Check X-Database-MD5 if it exists
-	headerMd5 := resp.Header.Get("X-Database-MD5")
-	if len(headerMd5) > 0 && db.checksum != headerMd5 {
-		return true, nil
-	}
-
-	if stat.Size() != resp.ContentLength {
-		return true, nil
-	}
 	return false, nil
 }
 

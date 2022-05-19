@@ -20,4 +20,7 @@ jobs:
       run: go build -v ./...
 
     - name: Test
-      run: go test -v ./ ./apiserver
+      timeout-minutes: 2
+      run: |
+        go test -v ./
+        go test -v ./apiserver
