@@ -3,7 +3,7 @@ name: Publish to Docker Hub
 on:
   schedule:
     # Publish automatically on the 2nd of the month at 0:20 AM
-    - cron: '20 0 2 * *'
+    - cron: '20 0 3 * *'
   workflow_dispatch:
     inputs:
       month:
